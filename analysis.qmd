@@ -1,0 +1,218 @@
+---
+title: Analyzing Music Data
+author: Gokul Patibandla
+format: html
+execute:
+  echo: false
+---
+```{r}
+#| message: false
+library(tidyverse)
+```
+```{r}
+billboard |>
+  select(artist, track, date.entered, wk1:wk4)
+```
+```{r}
+# Count how many wk6 values exist
+billboard |>
+  summarize(n_values = sum(!is.na(wk6)))
+
+# Histogram of wk6 rankings
+billboard |>
+  ggplot(aes(x = wk6)) +
+  geom_histogram(binwidth = 1, color = "white") +
+  labs(
+    title = "Distribution of wk6 Rankings",
+    x = "wk6 Ranking",
+    y = "Count"
+  )
+```
+```{r}
+billboard |>
+  summarize(
+    wk1_present  = sum(!is.na(wk1)),
+    wk1_missing  = sum(is.na(wk1)),
+    wk4_present  = sum(!is.na(wk4)),
+    wk4_missing  = sum(is.na(wk4)),
+    wk10_present = sum(!is.na(wk10)),
+    wk10_missing = sum(is.na(wk10)),
+    wk20_present = sum(!is.na(wk20)),
+    wk20_missing = sum(is.na(wk20)),
+    wk40_present = sum(!is.na(wk40)),
+    wk40_missing = sum(is.na(wk40)),
+    wk76_present = sum(!is.na(wk76)),
+    wk76_missing = sum(is.na(wk76))
+  )
+```
+```{r}
+billboard |>
+  mutate(
+    ever_on_chart = rowSums(!is.na(across(starts_with("wk")))) > 0,
+    ever_off_chart = rowSums(is.na(across(starts_with("wk")))) > 0
+  ) |>
+  mutate(
+    reentered = ever_on_chart & ever_off_chart
+  ) |>
+  summarize(
+    reentered_yes = sum(reentered),
+    reentered_no  = sum(!reentered)
+  )
+```
+```{r}
+billboard |>
+  mutate(
+    change = wk6 - wk1,
+    category = case_when(
+      is.na(wk1) | is.na(wk6) ~ "missing",
+      change < 0 ~ "improved",
+      change == 0 ~ "same",
+      change > 0 ~ "worse"
+    )
+  ) |>
+  summarize(
+    improved = sum(category == "improved"),
+    same = sum(category == "same"),
+    worse = sum(category == "worse"),
+    missing = sum(category == "missing"),
+    median_change = median(change, na.rm = TRUE)
+  )
+```
+```{r}
+billboard |>
+  pivot_longer(
+    cols = starts_with("wk"),
+    names_to = "week",
+    values_to = "rank",
+    names_prefix = "wk",
+    names_transform = list(week = as.integer)
+  ) |>
+  filter(!is.na(rank)) |>
+  ggplot(aes(x = week, y = rank, group = track)) +
+  geom_line(alpha = 0.3) +
+  scale_y_reverse() +
+  labs(
+    title = "Song Rankings Over Time",
+    x = "Week on Chart",
+    y = "Rank (1 = Best)"
+  )
+```
+```{r}
+# Reshape to long format
+bill_long <- billboard |>
+  pivot_longer(
+    cols = starts_with("wk"),
+    names_to = "week",
+    values_to = "rank",
+    names_prefix = "wk",
+    names_transform = list(week = as.integer)
+  ) |>
+  filter(!is.na(rank))
+
+# Song-level summary
+song_summary <- bill_long |>
+  group_by(artist, track) |>
+  summarize(
+    first_rank = first(rank),
+    best_rank = min(rank),
+    first_week_best = week[which.min(rank)],
+    total_weeks = n(),
+    .groups = "drop"
+  )
+
+# Identify notable top-10 songs
+top10_songs <- song_summary |>
+  filter(best_rank <= 10)
+
+fastest_to_number1 <- top10_songs |>
+  filter(best_rank == 1) |>
+  slice_min(first_week_best, n = 1)
+
+slowest_to_number1 <- top10_songs |>
+  filter(best_rank == 1) |>
+  slice_max(first_week_best, n = 1)
+
+longest_chart_run <- top10_songs |>
+  slice_max(total_weeks, n = 1)
+
+list(
+  song_summary = song_summary,
+  fastest_to_number1 = fastest_to_number1,
+  slowest_to_number1 = slowest_to_number1,
+  longest_chart_run = longest_chart_run
+)
+```
+```{r}
+#| cache: true
+
+# Reshape to long format
+bill_long <- billboard |>
+  pivot_longer(
+    cols = starts_with("wk"),
+    names_to = "week",
+    values_to = "rank",
+    names_prefix = "wk",
+    names_transform = list(week = as.integer)
+  ) |>
+  filter(!is.na(rank))
+
+# Song-level summary
+song_summary <- bill_long |>
+  group_by(artist, track) |>
+  summarize(
+    first_rank = first(rank),
+    best_rank = min(rank),
+    first_week_best = week[which.min(rank)],
+    total_weeks = n(),
+    .groups = "drop"
+  )
+
+# Top-10 songs
+top10_songs <- song_summary |>
+  filter(best_rank <= 10)
+
+# Notable songs
+fastest_to_number1 <- top10_songs |>
+  filter(best_rank == 1) |>
+  slice_min(first_week_best, n = 1) |>
+  mutate(type = "Fastest to #1")
+
+slowest_to_number1 <- top10_songs |>
+  filter(best_rank == 1) |>
+  slice_max(first_week_best, n = 1) |>
+  mutate(type = "Slowest to #1")
+
+longest_chart_run <- top10_songs |>
+  slice_max(total_weeks, n = 1) |>
+  mutate(type = "Longest Chart Run")
+
+# Combine notable songs
+notable <- bind_rows(
+  fastest_to_number1,
+  slowest_to_number1,
+  longest_chart_run
+)
+
+# JOIN type column into long data
+bill_long_with_type <- bill_long |>
+  left_join(notable |> select(artist, track, type),
+            by = c("artist", "track"))
+
+# Plot
+bill_long_with_type |>
+  filter(track %in% top10_songs$track) |>
+  ggplot(aes(x = week, y = rank, group = track)) +
+  geom_line(color = "gray80", alpha = 0.5) +
+  geom_line(
+    data = bill_long_with_type |> filter(!is.na(type)),
+    aes(color = type),
+    size = 1.2
+  ) +
+  scale_y_reverse() +
+  labs(
+    title = "Top-10 Songs: Ranking Over Time",
+    x = "Week on Chart",
+    y = "Rank (1 = Best)",
+    color = "Notable Songs"
+  )
+```
